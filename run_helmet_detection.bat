@@ -14,14 +14,14 @@ set /p choice="Nhap lua chon (1-3): "
 
 if "%choice%"=="1" (
     echo Dang chay ung dung nhan dien mat + mu bao hiem...
-    python head_detection_app_with_helmet.py
+    python apps/head_detection_app_with_helmet.py
 ) else if "%choice%"=="2" (
     echo Dang train model mu bao hiem...
     cd helmet_detection_project
     python training/train_model.py --mode quick --epochs 20
 ) else if "%choice%"=="3" (
     echo Dang chay ung dung cu...
-    python head_detection_app.py
+    python apps/head_detection_app.py
 ) else (
     echo Lua chon khong hop le!
 )

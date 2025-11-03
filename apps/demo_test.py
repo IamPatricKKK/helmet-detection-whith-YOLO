@@ -2,6 +2,12 @@ import cv2
 import numpy as np
 from ultralytics import YOLO
 import os
+import sys
+
+# Thêm root folder vào path để tìm yolov8n.pt
+root_dir = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+sys.path.insert(0, root_dir)
+os.chdir(root_dir)  # Change working directory to root
 
 def create_demo_image():
     """Tạo ảnh demo để test"""
@@ -50,9 +56,8 @@ def main():
         print()
         print("✅ Tất cả test đều thành công!")
         print("Bạn có thể chạy ứng dụng chính bằng:")
-        print("  - Windows: run_app.bat")
-        print("  - Linux/Mac: ./run_app.sh")
-        print("  - Hoặc: python face_detection_app.py")
+        print("  - Windows: run_helmet_detection.bat")
+        print("  - Hoặc: python apps/head_detection_app_with_helmet.py")
     else:
         print()
         print("❌ Có lỗi xảy ra. Vui lòng kiểm tra lại cài đặt.")

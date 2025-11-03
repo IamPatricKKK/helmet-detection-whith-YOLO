@@ -88,6 +88,7 @@ head_result*.png
 helmet_detection_project/data_collection/
 
 # Kết quả output images (không cần version control)
+results/
 *.jpg
 !README*.jpg
 !*.md

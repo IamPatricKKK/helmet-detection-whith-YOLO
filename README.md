@@ -1,11 +1,12 @@
-# Ứng dụng Nhận diện Khuôn mặt sử dụng YOLO v8 và MTCNN
+# Ứng dụng Nhận diện Khuôn mặt & Đầu người + Mũ Bảo Hiểm
 
 ## Mô tả dự án
 
-Dự án này cung cấp nhiều phương pháp để nhận diện khuôn mặt với các tính năng:
-- **Nhận diện từ Camera trực tiếp**: Sử dụng webcam để nhận diện khuôn mặt trong thời gian thực
-- **Nhận diện từ Ảnh**: Upload và xử lý ảnh để tìm khuôn mặt
-- **Nhận diện từ Video**: Xử lý file video để nhận diện khuôn mặt trong từng frame
+Dự án này cung cấp nhiều phương pháp để nhận diện khuôn mặt, đầu người và **nhận diện mũ bảo hiểm** với các tính năng:
+- **Nhận diện từ Camera trực tiếp**: Sử dụng webcam để nhận diện khuôn mặt/đầu người trong thời gian thực
+- **Nhận diện từ Ảnh**: Upload và xử lý ảnh để tìm khuôn mặt/đầu người
+- **Nhận diện từ Video**: Xử lý file video để nhận diện khuôn mặt/đầu người trong từng frame
+- **⭐ Nhận diện Mũ Bảo Hiểm**: Phân loại có/không có mũ bảo hiểm bằng CNN với các đặc trưng cải tiến (RGB + HSV, Spatial Attention, ROI cropping)
 
 ## Các phiên bản ứng dụng
 
@@ -36,6 +37,16 @@ Dự án này cung cấp nhiều phương pháp để nhận diện khuôn mặt
 - Thuật toán nâng cao để nhận diện đầu người chính xác hơn
 - Mở rộng bounding box để bao gồm cả tóc và cổ
 - Hiển thị điểm trung tâm của đầu
+
+### 6. `head_detection_app_with_helmet.py` - Phiên bản nhận diện đầu người + Mũ Bảo Hiểm ⭐⭐⭐
+- Sử dụng YOLO v8 để nhận diện đầu người
+- **Tích hợp CNN model để nhận diện mũ bảo hiểm**
+- **Multi-branch CNN với RGB + HSV color spaces**
+- **Spatial Attention mechanism** để tập trung vào vùng quan trọng
+- **ROI cropping (top 30%)** để focus vào vùng mũ bảo hiểm
+- Thống kê có/không có mũ bảo hiểm
+- Tự động chụp và lưu đầu người khi phát hiện
+- Hiển thị kết quả với màu sắc phân biệt (xanh = có mũ, đỏ = không có mũ)
 
 
 ## Yêu cầu hệ thống
@@ -84,9 +95,19 @@ pip install -r requirements.txt
 pip install -r requirements_v2.txt
 ```
 
+**Cho phiên bản nhận diện mũ bảo hiểm (Khuyến nghị):**
+```bash
+# Cài đặt TensorFlow (bắt buộc cho helmet detection)
+pip install tensorflow==2.13.0
+
+# Hoặc cài đặt từ requirements.txt (nếu đã uncomment)
+pip install -r requirements.txt
+```
+
 **Lưu ý**: 
 - Lần đầu chạy, YOLO sẽ tự động tải model `yolov8n.pt` (khoảng 6MB)
 - MTCNN sẽ tải các model weights khi chạy lần đầu
+- **Helmet detection model** cần được train trước (xem phần Training Model bên dưới)
 
 ### Bước 4: Chạy ứng dụng
 
@@ -115,6 +136,21 @@ python head_detection_app.py
 python advanced_head_detection_app.py
 ```
 
+**Phiên bản nhận diện đầu người + Mũ Bảo Hiểm (Khuyến nghị):**
+```bash
+python apps/head_detection_app_with_helmet.py
+```
+
+**Hoặc sử dụng batch file (Windows):**
+```bash
+run_helmet_detection.bat
+```
+
+**Lưu ý**: 
+- Tất cả file ảnh/video kết quả sẽ được lưu vào folder `results/`
+- Các file Python YOLO đã được sắp xếp vào folder `apps/`
+- **📖 Xem hướng dẫn chi tiết**: `HUONG_DAN_CHAY_DU_AN.md`
+
 
 ## Các thư viện được sử dụng
 
@@ -136,6 +172,19 @@ python advanced_head_detection_app.py
 | mtcnn | 0.1.1 | Nhận diện khuôn mặt với landmarks |
 | tensorflow | 2.13.0 | Framework cho MTCNN |
 | *(các thư viện khác giống phiên bản cơ bản)* | | |
+
+### Phiên bản nhận diện mũ bảo hiểm (Khuyến nghị)
+| Thư viện | Phiên bản | Mục đích |
+|----------|-----------|----------|
+| tensorflow | 2.13.0 | **Bắt buộc** - Framework cho CNN model nhận diện mũ |
+| scikit-learn | 1.3.0+ | Metrics và evaluation |
+| scipy | 1.10.1+ | Scientific computing |
+| *(các thư viện khác giống phiên bản cơ bản)* | | |
+
+**Lưu ý**: TensorFlow hiện đang được comment trong `requirements.txt`. Bạn cần uncomment hoặc cài đặt thủ công:
+```bash
+pip install tensorflow==2.13.0
+```
 
 ## Hướng dẫn sử dụng
 
@@ -204,16 +253,75 @@ self.model = YOLO('yolov8n.pt')
 self.model = YOLO('yolov8l.pt')
 ```
 
+## Training Model Nhận diện Mũ Bảo Hiểm
+
+### Bước 1: Thu thập dữ liệu
+```bash
+cd helmet_detection_project
+python data_collection/data_collection_app.py
+```
+
+### Bước 2: Preprocessing dữ liệu
+```bash
+python data_preprocessing/preprocess_data.py
+```
+
+### Bước 3: Training model
+```bash
+# Training nhanh (test)
+python training/train_model.py --mode quick --epochs 20
+
+# Training đầy đủ với multi-branch model (Khuyến nghị)
+python training/train_model.py --mode full --epochs 50
+
+# Training với transfer learning (ResNet50)
+python training/train_model.py --mode transfer --epochs 30
+
+# Training với MobileNetV2 (nhẹ, phù hợp mobile)
+python training/train_model.py --mode mobile --epochs 40
+```
+
+### Các cải tiến model:
+- **Multi-branch CNN**: Sử dụng cả RGB và HSV color spaces
+- **Spatial Attention**: Tập trung vào vùng quan trọng (vùng mũ)
+- **ROI Cropping**: Crop top 30% để focus vào vùng mũ bảo hiểm
+- **Improved Architectures**: Custom, ResNet50, MobileNetV2 với attention
+
+Xem chi tiết trong:
+- `FEATURES_GUIDE.md` - Hướng dẫn về các features
+- `IMPROVEMENTS_SUMMARY.md` - Tóm tắt các cải tiến
+- `improved_feature_extraction.py` - Code mẫu cho features nâng cao
+
 ## Cấu trúc dự án
 
 ```
 NHANDIENMATNGUOI_YOLO/
-├── face_detection_app.py    # Ứng dụng chính
-├── requirements.txt         # Danh sách thư viện
-├── README.md               # Tài liệu này
-├── result_*.jpg           # Ảnh kết quả (tự tạo)
-├── result_*.mp4           # Video kết quả (tự tạo)
-└── venv/                  # Môi trường ảo (nếu tạo)
+├── apps/                            # ⭐ Folder chứa các ứng dụng YOLO detection
+│   ├── head_detection_app.py        # Ứng dụng nhận diện đầu người
+│   ├── head_detection_app_with_helmet.py  # ⭐ Ứng dụng chính: Nhận diện đầu + Mũ bảo hiểm
+│   ├── head_detection_app_refactored.py   # Phiên bản refactored
+│   ├── detection.py                 # Detection module
+│   ├── gui.py                       # GUI module
+│   ├── capture.py                   # Capture module
+│   ├── config.py                    # Config module
+│   ├── demo_test.py                 # Script test YOLO
+│   └── copy_helmet_model.py        # Script copy helmet model
+├── requirements.txt                 # Danh sách thư viện
+├── README.md                       # Tài liệu này
+├── FEATURES_GUIDE.md               # ⭐ Hướng dẫn về features cho helmet detection
+├── IMPROVEMENTS_SUMMARY.md         # ⭐ Tóm tắt các cải tiến
+├── improved_feature_extraction.py  # ⭐ Code mẫu cho features nâng cao
+├── helmet_detection_project/       # ⭐ Dự án con: Training và inference helmet model
+│   ├── data_collection/            # Thu thập dữ liệu
+│   ├── data_preprocessing/          # Preprocessing dữ liệu
+│   ├── training/                   # Training model
+│   ├── inference/                  # Inference app
+│   └── models/                     # Model đã train
+├── results/                        # ⭐ Folder chứa ảnh/video kết quả nhận diện
+├── captured_heads/                 # Ảnh đầu người đã chụp (tự tạo)
+├── run_head_detection.bat          # Batch file chạy head detection
+├── run_helmet_detection.bat        # Batch file chạy helmet detection
+└── venv/                           # Môi trường ảo (nếu tạo)
 ```
 
 ## Tính năng nâng cao
@@ -247,6 +355,38 @@ Nếu gặp vấn đề hoặc có câu hỏi, vui lòng:
 
 Dự án này sử dụng các thư viện mã nguồn mở. Vui lòng tuân thủ các giấy phép của từng thư viện.
 
+## Các cải tiến mới ⭐
+
+### Nhận diện Mũ Bảo Hiểm với Features Cải tiến
+
+#### 1. **Multi-Branch CNN (RGB + HSV)**
+- Sử dụng cả RGB và HSV color spaces
+- HSV giúp phân biệt màu sắc mũ bảo hiểm tốt hơn
+- Kết hợp features từ cả 2 branches
+
+#### 2. **Spatial Attention Mechanism**
+- Tự động tập trung vào vùng quan trọng (vùng mũ)
+- Giảm noise và cải thiện accuracy
+
+#### 3. **ROI Cropping (Top 30%)**
+- Crop và focus vào vùng top 30% của đầu
+- Nơi mũ bảo hiểm thường xuất hiện
+- Giảm false positives
+
+#### 4. **Improved Model Architectures**
+- Custom CNN với attention
+- ResNet50 với attention
+- MobileNetV2 với attention
+- Multi-branch model (mới)
+
+### Kỳ vọng cải thiện:
+- **Accuracy**: ~85-90% → **~92-95%**
+- **Features**: RGB → **RGB + HSV + Attention + ROI**
+
+Xem chi tiết: `FEATURES_GUIDE.md` và `IMPROVEMENTS_SUMMARY.md`
+
 ---
 
-**Lưu ý**: Dự án này chỉ nhận diện người nói chung, không phải nhận diện khuôn mặt cụ thể. Để nhận diện khuôn mặt cụ thể, bạn cần sử dụng các mô hình chuyên biệt như FaceNet hoặc ArcFace.
+**Lưu ý**: 
+- Dự án này nhận diện người/khuôn mặt/đầu người nói chung, không phải nhận diện khuôn mặt cụ thể. Để nhận diện khuôn mặt cụ thể, bạn cần sử dụng các mô hình chuyên biệt như FaceNet hoặc ArcFace.
+- **Helmet detection model** cần được train trước khi sử dụng. Xem phần "Training Model Nhận diện Mũ Bảo Hiểm" bên trên.

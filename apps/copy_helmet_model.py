@@ -4,7 +4,13 @@ Script để copy model nhận diện mũ bảo hiểm vào thư mục chính
 
 import os
 import shutil
+import sys
 from pathlib import Path
+
+# Thêm root folder vào path
+root_dir = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+sys.path.insert(0, root_dir)
+os.chdir(root_dir)  # Change working directory to root
 
 
 def copy_helmet_model():
@@ -54,7 +60,8 @@ def main():
     if copy_helmet_model():
         print("\n🎉 Hoàn thành!")
         print("Bây giờ bạn có thể chạy:")
-        print("python head_detection_app_with_helmet.py")
+        print("python apps/head_detection_app_with_helmet.py")
+        print("Hoặc: run_helmet_detection.bat")
     else:
         print("\n❌ Chưa thể copy model")
         print("Hãy train model trước!")

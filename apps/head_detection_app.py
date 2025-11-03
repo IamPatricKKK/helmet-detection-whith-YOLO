@@ -16,6 +16,11 @@ class HeadDetectionApp:
         self.root.title("Ứng dụng Nhận diện Khuôn mặt & Đầu người")
         self.root.geometry("800x600")
         
+        # Tạo thư mục kết quả
+        self.results_folder = "results"
+        if not os.path.exists(self.results_folder):
+            os.makedirs(self.results_folder)
+        
         # Khởi tạo model YOLO và face cascade
         self.model = None
         self.face_cascade = None
@@ -500,8 +505,9 @@ class HeadDetectionApp:
             else:
                 self.log_info("Không phát hiện khuôn mặt/đầu nào trong ảnh")
             
-            # Lưu ảnh kết quả
-            output_path = f"head_result_{os.path.basename(file_path)}"
+            # Lưu ảnh kết quả vào folder results
+            output_filename = f"head_result_{os.path.basename(file_path)}"
+            output_path = os.path.join(self.results_folder, output_filename)
             cv2.imwrite(output_path, annotated_image)
             self.log_info(f"Đã lưu kết quả: {output_path}")
             
@@ -539,8 +545,9 @@ class HeadDetectionApp:
             self.log_info(f"Đang xử lý video: {os.path.basename(file_path)}")
             self.log_info(f"Kích thước: {width}x{height}, FPS: {fps}")
             
-            # Tạo video writer cho output
-            output_path = f"head_result_{os.path.basename(file_path)}"
+            # Tạo video writer cho output - lưu vào folder results
+            output_filename = f"head_result_{os.path.basename(file_path)}"
+            output_path = os.path.join(self.results_folder, output_filename)
             fourcc = cv2.VideoWriter_fourcc(*'mp4v')
             out = cv2.VideoWriter(output_path, fourcc, fps, (width, height))
             

@@ -51,7 +51,12 @@ class HelmetTrainingPipeline:
         # Bước 3: Tạo và compile model
         print("\nĐang tạo model...")
         self.model = HelmetDetectionModel()
-        self.model.create_model(model_type)
+        # Sử dụng improved features mặc định (multi-branch cho custom, attention cho transfer learning)
+        use_improved = True
+        if model_type == "multi_branch":
+            self.model.create_model(model_type="multi_branch", use_improved_features=True)
+        else:
+            self.model.create_model(model_type=model_type, use_improved_features=use_improved)
         self.model.compile_model(learning_rate=0.001)
         
         # Hiển thị model summary

@@ -14,7 +14,7 @@ import time
 from datetime import datetime
 from ultralytics import YOLO
 import matplotlib.pyplot as plt
-# import tensorflow as tf
+import tensorflow as tf
 
 
 class HeadDetectionApp:
@@ -34,6 +34,11 @@ class HeadDetectionApp:
         timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
         self.main_folder = "captured_heads"
         self.save_folder = os.path.join(self.main_folder, f"session_{timestamp}")
+        
+        # Tạo thư mục kết quả
+        self.results_folder = "results"
+        if not os.path.exists(self.results_folder):
+            os.makedirs(self.results_folder)
         
         # Tạo thư mục chính nếu chưa có
         if not os.path.exists(self.main_folder):
@@ -209,12 +214,13 @@ class HeadDetectionApp:
             self.log_info(f"❌ Lỗi khi tải model: {str(e)}")
             messagebox.showerror("Lỗi", f"Không thể tải model: {str(e)}")
     
-    def predict_helmet(self, face_image):
+    def predict_helmet(self, face_image, use_roi_crop=True):
         """
-        Dự đoán mũ bảo hiểm cho một ảnh khuôn mặt
+        Dự đoán mũ bảo hiểm cho một ảnh khuôn mặt với cải tiến ⭐
         
         Args:
             face_image: Ảnh khuôn mặt (BGR)
+            use_roi_crop: Có crop vùng top 30% (vùng mũ bảo hiểm) không
             
         Returns:
             tuple: (prediction, confidence)
@@ -223,13 +229,43 @@ class HeadDetectionApp:
             return "Model chưa load", 0.0
         
         try:
-            # Preprocess ảnh
+            # Convert BGR to RGB
             face_rgb = cv2.cvtColor(face_image, cv2.COLOR_BGR2RGB)
-            face_resized = cv2.resize(face_rgb, (224, 224))
+            
+            # ⭐ CẢI TIẾN: Crop vùng top 30% để focus vào vùng mũ bảo hiểm
+            if use_roi_crop and face_rgb.shape[0] > 100:
+                h = face_rgb.shape[0]
+                top_region = face_rgb[:int(h*0.3), :, :]
+                # Resize lại về kích thước chuẩn
+                face_resized = cv2.resize(top_region, (224, 224))
+            else:
+                face_resized = cv2.resize(face_rgb, (224, 224))
+            
+            # Normalize
             face_normalized = face_resized.astype(np.float32) / 255.0
             
-            # Dự đoán
-            prediction = self.helmet_model.predict(np.expand_dims(face_normalized, axis=0), verbose=0)
+            # Kiểm tra xem model có phải multi-branch không (cần cả RGB và HSV)
+            is_multi_branch = len(self.helmet_model.inputs) == 2
+            
+            if is_multi_branch:
+                # ⭐ CẢI TIẾN: Multi-branch model với RGB và HSV
+                # RGB input
+                rgb_input = np.expand_dims(face_normalized, axis=0)
+                
+                # HSV input
+                hsv_image = cv2.cvtColor(face_resized, cv2.COLOR_RGB2HSV).astype(np.float32)
+                # Normalize HSV: H [0, 360] -> [0, 1], S [0, 255] -> [0, 1], V [0, 255] -> [0, 1]
+                hsv_image[:, :, 0] = hsv_image[:, :, 0] / 180.0
+                hsv_image[:, :, 1] = hsv_image[:, :, 1] / 255.0
+                hsv_image[:, :, 2] = hsv_image[:, :, 2] / 255.0
+                hsv_input = np.expand_dims(hsv_image, axis=0)
+                
+                # Predict với cả RGB và HSV
+                prediction = self.helmet_model.predict([rgb_input, hsv_input], verbose=0)
+            else:
+                # Single input model (backward compatible)
+                prediction = self.helmet_model.predict(np.expand_dims(face_normalized, axis=0), verbose=0)
+            
             predicted_class = np.argmax(prediction[0])
             confidence = np.max(prediction[0])
             
@@ -247,10 +283,10 @@ class HeadDetectionApp:
                 else:
                     return class_names[1], confidence  # Không chắc chắn thì có mũ
             
-            return class_names[predicted_class], confidence
-            
         except Exception as e:
             self.log_info(f"Lỗi khi dự đoán mũ bảo hiểm: {str(e)}")
+            import traceback
+            self.log_info(traceback.format_exc())
             return "Lỗi", 0.0
     
     def detect_faces_and_heads_with_helmet(self, frame):
@@ -612,7 +648,9 @@ class HeadDetectionApp:
             else:
                 self.log_info("Không phát hiện khuôn mặt/đầu nào trong ảnh")
             
-            output_path = f"head_result_{os.path.basename(file_path)}"
+            # Lưu vào folder results
+            output_filename = f"head_result_{os.path.basename(file_path)}"
+            output_path = os.path.join(self.results_folder, output_filename)
             cv2.imwrite(output_path, annotated_image)
             self.log_info(f"Đã lưu kết quả: {output_path}")
             
@@ -647,7 +685,9 @@ class HeadDetectionApp:
             self.log_info(f"Đang xử lý video: {os.path.basename(file_path)}")
             self.log_info(f"Kích thước: {width}x{height}, FPS: {fps}")
             
-            output_path = f"head_result_{os.path.basename(file_path)}"
+            # Lưu vào folder results
+            output_filename = f"head_result_{os.path.basename(file_path)}"
+            output_path = os.path.join(self.results_folder, output_filename)
             fourcc = cv2.VideoWriter_fourcc(*'mp4v')
             out = cv2.VideoWriter(output_path, fourcc, fps, (width, height))
             

@@ -21,23 +21,35 @@ class HelmetDetectionModel:
         self.model = None
         self.history = None
         
-    def create_model(self, model_type="custom"):
+    def create_model(self, model_type="custom", use_improved_features=True):
         """
         Tạo model CNN
         
         Args:
-            model_type: Loại model ("custom", "resnet", "mobilenet")
+            model_type: Loại model ("custom", "resnet", "mobilenet", "multi_branch")
+            use_improved_features: Sử dụng multi-branch với HSV và spatial attention
         """
         if model_type == "custom":
-            self.model = self._create_custom_model()
+            if use_improved_features:
+                self.model = self._create_improved_custom_model()
+            else:
+                self.model = self._create_custom_model()
         elif model_type == "resnet":
-            self.model = self._create_resnet_model()
+            if use_improved_features:
+                self.model = self._create_improved_resnet_model()
+            else:
+                self.model = self._create_resnet_model()
         elif model_type == "mobilenet":
-            self.model = self._create_mobilenet_model()
+            if use_improved_features:
+                self.model = self._create_improved_mobilenet_model()
+            else:
+                self.model = self._create_mobilenet_model()
+        elif model_type == "multi_branch":
+            self.model = self._create_multi_branch_model()
         else:
-            raise ValueError("model_type phải là 'custom', 'resnet', hoặc 'mobilenet'")
+            raise ValueError("model_type phải là 'custom', 'resnet', 'mobilenet', hoặc 'multi_branch'")
         
-        print(f"Đã tạo model {model_type}")
+        print(f"Đã tạo model {model_type} (improved_features={use_improved_features})")
         print(f"Tổng số parameters: {self.model.count_params():,}")
     
     def _create_custom_model(self):
@@ -132,6 +144,186 @@ class HelmetDetectionModel:
             layers.Dense(self.num_classes, activation='softmax')
         ])
         
+        return model
+    
+    def _create_multi_branch_model(self):
+        """
+        Tạo multi-branch model với RGB và HSV branches ⭐ CẢI TIẾN
+        Sử dụng cả RGB và HSV color spaces để cải thiện accuracy
+        """
+        # Input RGB
+        input_rgb = layers.Input(shape=self.input_shape, name='rgb_input')
+        
+        # Input HSV
+        input_hsv = layers.Input(shape=self.input_shape, name='hsv_input')
+        
+        # Branch 1: RGB CNN
+        rgb_branch = self._create_cnn_branch(input_rgb, name='rgb')
+        
+        # Branch 2: HSV CNN
+        hsv_branch = self._create_cnn_branch(input_hsv, name='hsv')
+        
+        # Concatenate branches
+        concatenated = layers.Concatenate(name='concatenate_branches')([rgb_branch, hsv_branch])
+        
+        # Spatial Attention (tập trung vào vùng quan trọng)
+        attention = self._create_spatial_attention(concatenated)
+        
+        # Dense layers
+        x = layers.Dense(512, activation='relu', name='dense1')(attention)
+        x = layers.BatchNormalization(name='bn_dense1')(x)
+        x = layers.Dropout(0.5, name='dropout1')(x)
+        
+        x = layers.Dense(256, activation='relu', name='dense2')(x)
+        x = layers.BatchNormalization(name='bn_dense2')(x)
+        x = layers.Dropout(0.5, name='dropout2')(x)
+        
+        # Output
+        output = layers.Dense(self.num_classes, activation='softmax', name='output')(x)
+        
+        model = keras.Model(inputs=[input_rgb, input_hsv], outputs=output, name='multi_branch_helmet_model')
+        
+        return model
+    
+    def _create_cnn_branch(self, input_layer, name=''):
+        """Tạo một CNN branch cho multi-branch model"""
+        x = layers.Conv2D(32, (3, 3), activation='relu', padding='same', name=f'{name}_conv1')(input_layer)
+        x = layers.BatchNormalization(name=f'{name}_bn1')(x)
+        x = layers.MaxPooling2D((2, 2), name=f'{name}_pool1')(x)
+        x = layers.Dropout(0.25, name=f'{name}_drop1')(x)
+        
+        x = layers.Conv2D(64, (3, 3), activation='relu', padding='same', name=f'{name}_conv2')(x)
+        x = layers.BatchNormalization(name=f'{name}_bn2')(x)
+        x = layers.MaxPooling2D((2, 2), name=f'{name}_pool2')(x)
+        x = layers.Dropout(0.25, name=f'{name}_drop2')(x)
+        
+        x = layers.Conv2D(128, (3, 3), activation='relu', padding='same', name=f'{name}_conv3')(x)
+        x = layers.BatchNormalization(name=f'{name}_bn3')(x)
+        x = layers.MaxPooling2D((2, 2), name=f'{name}_pool3')(x)
+        x = layers.Dropout(0.25, name=f'{name}_drop3')(x)
+        
+        x = layers.Conv2D(256, (3, 3), activation='relu', padding='same', name=f'{name}_conv4')(x)
+        x = layers.BatchNormalization(name=f'{name}_bn4')(x)
+        x = layers.MaxPooling2D((2, 2), name=f'{name}_pool4')(x)
+        x = layers.Dropout(0.25, name=f'{name}_drop4')(x)
+        
+        # Global Average Pooling để convert từ 4D tensor sang 2D
+        x = layers.GlobalAveragePooling2D(name=f'{name}_gap')(x)
+        
+        return x
+    
+    def _create_spatial_attention(self, input_tensor):
+        """
+        Tạo spatial attention mechanism
+        Tập trung vào features quan trọng (vùng mũ bảo hiểm)
+        """
+        # Tính attention weights
+        attention = layers.Dense(512, activation='tanh', name='attention_dense1')(input_tensor)
+        attention = layers.Dense(256, activation='sigmoid', name='attention_dense2')(attention)
+        
+        # Apply attention
+        attended = layers.Multiply(name='attention_apply')([input_tensor, attention])
+        
+        return attended
+    
+    def _create_improved_custom_model(self):
+        """Tạo custom model với spatial attention"""
+        inputs = layers.Input(shape=self.input_shape)
+        
+        # CNN layers
+        x = layers.Conv2D(32, (3, 3), activation='relu', padding='same')(inputs)
+        x = layers.BatchNormalization()(x)
+        x = layers.MaxPooling2D((2, 2))(x)
+        x = layers.Dropout(0.25)(x)
+        
+        x = layers.Conv2D(64, (3, 3), activation='relu', padding='same')(x)
+        x = layers.BatchNormalization()(x)
+        x = layers.MaxPooling2D((2, 2))(x)
+        x = layers.Dropout(0.25)(x)
+        
+        x = layers.Conv2D(128, (3, 3), activation='relu', padding='same')(x)
+        x = layers.BatchNormalization()(x)
+        x = layers.MaxPooling2D((2, 2))(x)
+        x = layers.Dropout(0.25)(x)
+        
+        x = layers.Conv2D(256, (3, 3), activation='relu', padding='same')(x)
+        x = layers.BatchNormalization()(x)
+        x = layers.MaxPooling2D((2, 2))(x)
+        x = layers.Dropout(0.25)(x)
+        
+        # Global Average Pooling
+        x = layers.GlobalAveragePooling2D()(x)
+        
+        # Spatial Attention
+        x = self._create_spatial_attention(x)
+        
+        # Dense layers
+        x = layers.Dense(512, activation='relu')(x)
+        x = layers.BatchNormalization()(x)
+        x = layers.Dropout(0.5)(x)
+        
+        x = layers.Dense(256, activation='relu')(x)
+        x = layers.BatchNormalization()(x)
+        x = layers.Dropout(0.5)(x)
+        
+        # Output
+        outputs = layers.Dense(self.num_classes, activation='softmax')(x)
+        
+        model = keras.Model(inputs=inputs, outputs=outputs)
+        return model
+    
+    def _create_improved_resnet_model(self):
+        """Tạo ResNet model với attention"""
+        base_model = keras.applications.ResNet50(
+            weights='imagenet',
+            include_top=False,
+            input_shape=self.input_shape
+        )
+        base_model.trainable = False
+        
+        inputs = layers.Input(shape=self.input_shape)
+        x = base_model(inputs, training=False)
+        x = layers.GlobalAveragePooling2D()(x)
+        
+        # Spatial Attention
+        x = self._create_spatial_attention(x)
+        
+        x = layers.Dense(512, activation='relu')(x)
+        x = layers.BatchNormalization()(x)
+        x = layers.Dropout(0.5)(x)
+        
+        x = layers.Dense(256, activation='relu')(x)
+        x = layers.BatchNormalization()(x)
+        x = layers.Dropout(0.5)(x)
+        
+        outputs = layers.Dense(self.num_classes, activation='softmax')(x)
+        
+        model = keras.Model(inputs=inputs, outputs=outputs)
+        return model
+    
+    def _create_improved_mobilenet_model(self):
+        """Tạo MobileNet model với attention"""
+        base_model = keras.applications.MobileNetV2(
+            weights='imagenet',
+            include_top=False,
+            input_shape=self.input_shape
+        )
+        base_model.trainable = False
+        
+        inputs = layers.Input(shape=self.input_shape)
+        x = base_model(inputs, training=False)
+        x = layers.GlobalAveragePooling2D()(x)
+        
+        # Spatial Attention
+        x = self._create_spatial_attention(x)
+        
+        x = layers.Dense(512, activation='relu')(x)
+        x = layers.BatchNormalization()(x)
+        x = layers.Dropout(0.5)(x)
+        
+        outputs = layers.Dense(self.num_classes, activation='softmax')(x)
+        
+        model = keras.Model(inputs=inputs, outputs=outputs)
         return model
     
     def compile_model(self, learning_rate=0.001):
@@ -338,12 +530,13 @@ class HelmetDetectionModel:
         self.model = keras.models.load_model(filepath)
         print(f"✅ Đã load model từ: {filepath}")
     
-    def predict_single_image(self, image):
+    def predict_single_image(self, image, use_roi_crop=True):
         """
         Dự đoán cho một ảnh đơn lẻ
         
         Args:
-            image: Ảnh input (numpy array)
+            image: Ảnh input (numpy array RGB hoặc BGR)
+            use_roi_crop: Có crop vùng top 30% (vùng mũ bảo hiểm) không
             
         Returns:
             tuple: (prediction, confidence)
@@ -351,16 +544,51 @@ class HelmetDetectionModel:
         if self.model is None:
             raise ValueError("Model chưa được load!")
         
+        # Kiểm tra model type
+        is_multi_branch = len(self.model.inputs) == 2
+        
         # Preprocess image
+        if use_roi_crop and image.shape[0] > 100:
+            # Crop top 30% để focus vào vùng mũ bảo hiểm
+            h = image.shape[0]
+            top_region = image[:int(h*0.3), :, :]
+            # Resize lại về kích thước chuẩn
+            import cv2
+            image = cv2.resize(top_region, (self.input_shape[0], self.input_shape[1]))
+        
         if image.dtype != np.float32:
             image = image.astype(np.float32) / 255.0
         
-        # Reshape for prediction
-        if len(image.shape) == 3:
-            image = np.expand_dims(image, axis=0)
+        if is_multi_branch:
+            # Multi-branch model cần cả RGB và HSV
+            rgb_image = image
+            # Convert RGB to HSV
+            import cv2
+            if len(image.shape) == 4:
+                hsv_image = np.array([cv2.cvtColor(img, cv2.COLOR_RGB2HSV) for img in image])
+            else:
+                # Convert single image
+                hsv_image = cv2.cvtColor((image * 255).astype(np.uint8), cv2.COLOR_RGB2HSV).astype(np.float32)
+                # Normalize HSV: H [0, 360] -> [0, 1], S [0, 255] -> [0, 1], V [0, 255] -> [0, 1]
+                hsv_image[:, :, 0] = hsv_image[:, :, 0] / 180.0
+                hsv_image[:, :, 1] = hsv_image[:, :, 1] / 255.0
+                hsv_image[:, :, 2] = hsv_image[:, :, 2] / 255.0
+            
+            # Reshape for prediction
+            if len(rgb_image.shape) == 3:
+                rgb_image = np.expand_dims(rgb_image, axis=0)
+            if len(hsv_image.shape) == 3:
+                hsv_image = np.expand_dims(hsv_image, axis=0)
+            
+            # Predict
+            prediction = self.model.predict([rgb_image, hsv_image], verbose=0)
+        else:
+            # Single input model
+            if len(image.shape) == 3:
+                image = np.expand_dims(image, axis=0)
+            
+            prediction = self.model.predict(image, verbose=0)
         
-        # Predict
-        prediction = self.model.predict(image, verbose=0)
         predicted_class = np.argmax(prediction[0])
         confidence = np.max(prediction[0])
         
