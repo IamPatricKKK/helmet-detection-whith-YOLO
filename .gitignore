@@ -55,6 +55,7 @@ ENV/
 env.bak/
 venv.bak/
 .venv
+apps/venv/
 
 # ============================================
 # Machine Learning / Deep Learning
@@ -62,7 +63,7 @@ venv.bak/
 # Model files (uncomment nếu muốn ignore model files lớn)
 # *.pt
 # *.pth
-# *.h5
+*.h5
 # *.pkl
 # *.onnx
 # *.pb
@@ -70,30 +71,20 @@ venv.bak/
 # Training data và preprocessed data
 *.npy
 *.npz
-data_preprocessing/*.npy
-data_preprocessing/*.pkl
-helmet_detection_project/data_preprocessing/*.npy
-helmet_detection_project/data_preprocessing/*.pkl
 
 # ============================================
 # Images & Media Files
 # ============================================
 # Captured images từ ứng dụng (có thể tạo lại)
+apps/captured_heads/
 captured_heads/
-head_result*.jpg
-head_result*.mp4
-head_result*.png
-
-# Training images (thường rất lớn, nên ignore)
-helmet_detection_project/data_collection/
 
 # Kết quả output images (không cần version control)
+apps/results/
 results/
 *.jpg
 !README*.jpg
-!*.md
 *.png
-!requirements.txt
 *.mp4
 *.avi
 *.mov
@@ -173,18 +164,6 @@ Icon
 *.tfevents.*
 
 # ============================================
-# Project Specific
-# ============================================
-# Batch files có thể chứa thông tin local
-# run*.bat  # Uncomment nếu muốn ignore batch files
-
-# Config files có thể chứa sensitive info
-# config.local.py
-# .env
-# .env.local
-
-# ============================================
 # Git
 # ============================================
 *.orig
-

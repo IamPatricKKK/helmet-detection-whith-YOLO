@@ -1,6 +1,7 @@
 """
-Ứng dụng Nhận diện Khuôn mặt & Đầu người với tính năng nhận diện mũ bảo hiểm
-Tích hợp model CNN để phân loại có/không có mũ bảo hiểm
+Ứng dụng Nhận diện Khuôn mặt với tính năng nhận diện mũ bảo hiểm
+- Nhận diện từ ảnh
+- Nhận diện từ camera trực tiếp (chụp ảnh mỗi 2 giây)
 """
 
 import tkinter as tk
@@ -13,15 +14,23 @@ import os
 import time
 from datetime import datetime
 from ultralytics import YOLO
-import matplotlib.pyplot as plt
-import tensorflow as tf
+
+# Import TensorFlow với xử lý lỗi
+try:
+    import tensorflow as tf
+    from tensorflow import keras
+    TENSORFLOW_AVAILABLE = True
+except ImportError:
+    TENSORFLOW_AVAILABLE = False
+    tf = None
+    keras = None
 
 
 class HeadDetectionApp:
     def __init__(self, root):
         self.root = root
-        self.root.title("Ứng dụng Nhận diện Khuôn mặt & Đầu người + Mũ bảo hiểm")
-        self.root.geometry("1000x700")
+        self.root.title("Ứng dụng Nhận diện Khuôn mặt + Mũ bảo hiểm")
+        self.root.geometry("900x650")
         
         # Khởi tạo model YOLO và face cascade
         self.model = None
@@ -35,11 +44,6 @@ class HeadDetectionApp:
         self.main_folder = "captured_heads"
         self.save_folder = os.path.join(self.main_folder, f"session_{timestamp}")
         
-        # Tạo thư mục kết quả
-        self.results_folder = "results"
-        if not os.path.exists(self.results_folder):
-            os.makedirs(self.results_folder)
-        
         # Tạo thư mục chính nếu chưa có
         if not os.path.exists(self.main_folder):
             os.makedirs(self.main_folder)
@@ -48,20 +52,21 @@ class HeadDetectionApp:
         if not os.path.exists(self.save_folder):
             os.makedirs(self.save_folder)
         
-        # Biến để theo dõi trạng thái phát hiện và chụp ảnh
-        self.last_detection_count = 0
-        self.last_capture_time = 0
-        self.stability_wait_time = 2.0
-        self.detection_start_time = 0
-        self.captured_faces_history = []
-        self.last_no_detection_log = 0
+        # Tạo thư mục con để phân loại ảnh có mũ và không có mũ
+        self.with_helmet_folder = os.path.join(self.save_folder, "with_helmet")
+        self.without_helmet_folder = os.path.join(self.save_folder, "without_helmet")
+        if not os.path.exists(self.with_helmet_folder):
+            os.makedirs(self.with_helmet_folder)
+        if not os.path.exists(self.without_helmet_folder):
+            os.makedirs(self.without_helmet_folder)
         
-        # Biến thống kê mũ bảo hiểm
-        self.helmet_stats = {
-            'total_detections': 0,
-            'with_helmet': 0,
-            'without_helmet': 0
-        }
+        # Biến để theo dõi chụp ảnh
+        self.last_capture_time = 0
+        self.capture_interval = 2.0  # Chụp mỗi 2 giây
+        
+        # Queue để xử lý inference song song (tối ưu tốc độ)
+        self.inference_queue = []
+        self.inference_lock = threading.Lock()
         
         # Tạo giao diện
         self.create_widgets()
@@ -79,7 +84,7 @@ class HeadDetectionApp:
         main_frame.grid(row=0, column=0, sticky=(tk.W, tk.E, tk.N, tk.S))
         
         # Tiêu đề
-        title_label = ttk.Label(main_frame, text="Ứng dụng Nhận diện Khuôn mặt & Đầu người + Mũ bảo hiểm", 
+        title_label = ttk.Label(main_frame, text="Ứng dụng Nhận diện Khuôn mặt + Mũ bảo hiểm", 
                                font=("Arial", 16, "bold"))
         title_label.grid(row=0, column=0, columnspan=2, pady=(0, 20))
         
@@ -96,13 +101,9 @@ class HeadDetectionApp:
                                    command=self.detect_from_image)
         self.image_btn.grid(row=0, column=1, padx=5)
         
-        self.video_btn = ttk.Button(mode_frame, text="Nhận diện từ Video", 
-                                   command=self.detect_from_video)
-        self.video_btn.grid(row=0, column=2, padx=5)
-        
         self.stop_btn = ttk.Button(mode_frame, text="Dừng Camera", 
                                   command=self.stop_camera, state="disabled")
-        self.stop_btn.grid(row=0, column=3, padx=5)
+        self.stop_btn.grid(row=0, column=2, padx=5)
         
         # Frame cài đặt
         settings_frame = ttk.LabelFrame(main_frame, text="Cài đặt", padding="10")
@@ -115,11 +116,8 @@ class HeadDetectionApp:
         ttk.Button(settings_frame, text="Đổi thư mục", 
                   command=self.change_save_folder).grid(row=0, column=2, padx=5)
         
-        ttk.Button(settings_frame, text="Reset lịch sử", 
-                  command=self.reset_captured_history).grid(row=1, column=0, columnspan=3, pady=5)
-        
         # Frame hiển thị kết quả
-        result_frame = ttk.LabelFrame(main_frame, text="Kết quả nhận diện khuôn mặt & đầu người + Mũ bảo hiểm", padding="10")
+        result_frame = ttk.LabelFrame(main_frame, text="Kết quả nhận diện", padding="10")
         result_frame.grid(row=2, column=0, columnspan=2, sticky=(tk.W, tk.E, tk.N, tk.S), pady=(10, 0))
         
         # Label hiển thị ảnh
@@ -127,33 +125,9 @@ class HeadDetectionApp:
                                     background="white", anchor="center")
         self.image_label.grid(row=0, column=0, sticky=(tk.W, tk.E, tk.N, tk.S))
         
-        # Frame thống kê mũ bảo hiểm
-        helmet_stats_frame = ttk.LabelFrame(main_frame, text="Thống kê Mũ bảo hiểm", padding="10")
-        helmet_stats_frame.grid(row=2, column=2, sticky=(tk.W, tk.E, tk.N, tk.S), 
-                               padx=(10, 0), pady=(10, 0))
-        
-        # Thống kê
-        ttk.Label(helmet_stats_frame, text="Thống kê:", font=("Arial", 12, "bold")).grid(row=0, column=0, columnspan=2, pady=(0, 10))
-        
-        ttk.Label(helmet_stats_frame, text="Tổng phát hiện:").grid(row=1, column=0, sticky=tk.W)
-        self.total_helmet_label = ttk.Label(helmet_stats_frame, text="0", foreground="blue", font=("Arial", 12, "bold"))
-        self.total_helmet_label.grid(row=1, column=1, padx=(10, 0))
-        
-        ttk.Label(helmet_stats_frame, text="Có mũ bảo hiểm:").grid(row=2, column=0, sticky=tk.W)
-        self.with_helmet_label = ttk.Label(helmet_stats_frame, text="0", foreground="green", font=("Arial", 12, "bold"))
-        self.with_helmet_label.grid(row=2, column=1, padx=(10, 0))
-        
-        ttk.Label(helmet_stats_frame, text="Không có mũ:").grid(row=3, column=0, sticky=tk.W)
-        self.without_helmet_label = ttk.Label(helmet_stats_frame, text="0", foreground="red", font=("Arial", 12, "bold"))
-        self.without_helmet_label.grid(row=3, column=1, padx=(10, 0))
-        
-        # Button reset thống kê
-        ttk.Button(helmet_stats_frame, text="Reset Thống kê", 
-                  command=self.reset_helmet_stats).grid(row=4, column=0, columnspan=2, pady=10)
-        
         # Frame thông tin
         info_frame = ttk.LabelFrame(main_frame, text="Thông tin", padding="10")
-        info_frame.grid(row=3, column=0, columnspan=3, sticky=(tk.W, tk.E), pady=(10, 0))
+        info_frame.grid(row=3, column=0, columnspan=2, sticky=(tk.W, tk.E), pady=(10, 0))
         
         # Text widget cho thông tin
         self.info_text = tk.Text(info_frame, height=8, width=80, wrap=tk.WORD)
@@ -184,14 +158,15 @@ class HeadDetectionApp:
             self.face_cascade = cv2.CascadeClassifier(cv2.data.haarcascades + 'haarcascade_frontalface_default.xml')
             self.log_info("✅ Đã tải thành công Haar Cascade!")
             
-            # Load helmet detection model
-            self.log_info("Đang tải model nhận diện mũ bảo hiểm...")
-            
-            # Tìm model ở các vị trí có thể
+            # Load helmet detection model từ apps/model
+            self.log_info("Đang tải model nhận diện mũ bảo hiểm từ apps/model...")
             possible_paths = [
-                "helmet_detection_project/models/helmet_detection_model.h5",  # Trong dự án helmet
-                "models/helmet_detection_model.h5",  # Trong thư mục chính
-                "helmet_detection_project/models/best_helmet_model.h5"  # Model tốt nhất
+                "model/best_model.h5",  # Từ cùng thư mục apps
+                "apps/model/best_model.h5",  # Từ root
+                "../apps/model/best_model.h5",  # Từ app/
+                "model/final_model.h5",  # Backup từ cùng thư mục apps
+                "apps/model/final_model.h5",  # Backup từ root
+                "../apps/model/final_model.h5"  # Backup từ app/
             ]
             
             helmet_model_path = None
@@ -201,234 +176,207 @@ class HeadDetectionApp:
                     break
             
             if helmet_model_path:
-                self.helmet_model = tf.keras.models.load_model(helmet_model_path)
-                self.log_info(f"✅ Đã tải thành công model từ: {helmet_model_path}")
+                if not TENSORFLOW_AVAILABLE:
+                    self.log_info("❌ TensorFlow chưa được cài đặt!")
+                    self.log_info("   Hãy chạy: pip install tensorflow")
+                    self.helmet_model = None
+                else:
+                    try:
+                        self.helmet_model = keras.models.load_model(helmet_model_path)
+                        self.log_info(f"✅ Đã tải thành công model từ: {helmet_model_path}")
+                    except Exception as e:
+                        self.log_info(f"❌ Lỗi khi load model: {str(e)}")
+                        self.helmet_model = None
             else:
                 self.log_info("⚠️ Model nhận diện mũ bảo hiểm chưa tồn tại!")
-                self.log_info("Hãy train model trước:")
-                self.log_info("cd helmet_detection_project")
-                self.log_info("python training/train_model.py --mode quick --epochs 20")
+                self.log_info("   Tìm trong: model/best_model.h5 hoặc apps/model/best_model.h5")
                 self.helmet_model = None
             
         except Exception as e:
             self.log_info(f"❌ Lỗi khi tải model: {str(e)}")
             messagebox.showerror("Lỗi", f"Không thể tải model: {str(e)}")
     
-    def predict_helmet(self, face_image, use_roi_crop=True):
+    def predict_helmet(self, face_image):
         """
-        Dự đoán mũ bảo hiểm cho một ảnh khuôn mặt với cải tiến ⭐
+        Dự đoán mũ bảo hiểm cho một ảnh khuôn mặt (tối ưu tốc độ)
         
         Args:
-            face_image: Ảnh khuôn mặt (BGR)
-            use_roi_crop: Có crop vùng top 30% (vùng mũ bảo hiểm) không
+            face_image: Ảnh khuôn mặt (BGR numpy array)
             
         Returns:
-            tuple: (prediction, confidence)
+            tuple: (has_helmet: bool, confidence: float, class_name: str)
         """
         if self.helmet_model is None:
-            return "Model chưa load", 0.0
+            return False, 0.0, "Chưa có model"
         
         try:
             # Convert BGR to RGB
-            face_rgb = cv2.cvtColor(face_image, cv2.COLOR_BGR2RGB)
-            
-            # ⭐ CẢI TIẾN: Crop vùng top 30% để focus vào vùng mũ bảo hiểm
-            if use_roi_crop and face_rgb.shape[0] > 100:
-                h = face_rgb.shape[0]
-                top_region = face_rgb[:int(h*0.3), :, :]
-                # Resize lại về kích thước chuẩn
-                face_resized = cv2.resize(top_region, (224, 224))
+            if len(face_image.shape) == 2:
+                # Nếu là grayscale, chuyển sang BGR rồi RGB
+                face_rgb = cv2.cvtColor(face_image, cv2.COLOR_GRAY2RGB)
             else:
-                face_resized = cv2.resize(face_rgb, (224, 224))
+                face_rgb = cv2.cvtColor(face_image, cv2.COLOR_BGR2RGB)
             
-            # Normalize
+            # Resize về kích thước model yêu cầu (224x224)
+            face_resized = cv2.resize(face_rgb, (224, 224))
+            
+            # Normalize [0, 255] -> [0, 1]
             face_normalized = face_resized.astype(np.float32) / 255.0
             
-            # Kiểm tra xem model có phải multi-branch không (cần cả RGB và HSV)
-            is_multi_branch = len(self.helmet_model.inputs) == 2
+            # Predict (batch size=1 để tối ưu)
+            prediction = self.helmet_model.predict(
+                np.expand_dims(face_normalized, axis=0), 
+                verbose=0
+            )
             
-            if is_multi_branch:
-                # ⭐ CẢI TIẾN: Multi-branch model với RGB và HSV
-                # RGB input
-                rgb_input = np.expand_dims(face_normalized, axis=0)
-                
-                # HSV input
-                hsv_image = cv2.cvtColor(face_resized, cv2.COLOR_RGB2HSV).astype(np.float32)
-                # Normalize HSV: H [0, 360] -> [0, 1], S [0, 255] -> [0, 1], V [0, 255] -> [0, 1]
-                hsv_image[:, :, 0] = hsv_image[:, :, 0] / 180.0
-                hsv_image[:, :, 1] = hsv_image[:, :, 1] / 255.0
-                hsv_image[:, :, 2] = hsv_image[:, :, 2] / 255.0
-                hsv_input = np.expand_dims(hsv_image, axis=0)
-                
-                # Predict với cả RGB và HSV
-                prediction = self.helmet_model.predict([rgb_input, hsv_input], verbose=0)
-            else:
-                # Single input model (backward compatible)
-                prediction = self.helmet_model.predict(np.expand_dims(face_normalized, axis=0), verbose=0)
+            predicted_class_idx = np.argmax(prediction[0])
+            confidence = float(np.max(prediction[0]))
             
-            predicted_class = np.argmax(prediction[0])
-            confidence = np.max(prediction[0])
+            # Model từ home_work_4: class 0 = no_helmet, class 1 = with_helmet
+            has_helmet = (predicted_class_idx == 1)
+            class_name = "Có mũ bảo hiểm" if has_helmet else "Không có mũ"
             
-            class_names = ["Không có mũ", "Có mũ bảo hiểm"]
-            
-            # Logic cân bằng hơn
-            if predicted_class == 1:  # Model dự đoán có mũ
-                if confidence > 0.5:  # Confidence trung bình
-                    return class_names[1], confidence
-                else:
-                    return class_names[0], confidence  # Không chắc chắn thì không có mũ
-            else:  # Model dự đoán không có mũ
-                if confidence > 0.5:  # Confidence trung bình
-                    return class_names[0], confidence
-                else:
-                    return class_names[1], confidence  # Không chắc chắn thì có mũ
+            return has_helmet, confidence, class_name
             
         except Exception as e:
             self.log_info(f"Lỗi khi dự đoán mũ bảo hiểm: {str(e)}")
             import traceback
             self.log_info(traceback.format_exc())
-            return "Lỗi", 0.0
+            return False, 0.0, "Lỗi"
     
-    def detect_faces_and_heads_with_helmet(self, frame):
-        """Kết hợp phát hiện khuôn mặt, đầu người và nhận diện mũ bảo hiểm"""
-        if self.model is None or self.face_cascade is None:
-            return frame, 0, []
-        
+    def detect_faces(self, frame):
+        """
+        Phát hiện khuôn mặt và đầu người trong frame - Chỉ chọn 1 khuôn mặt/đầu gần nhất
+        - Haar Cascade: Phát hiện khuôn mặt (chạy song song)
+        - YOLO: Phát hiện đầu người (chạy song song, hoạt động tốt kể cả khi đeo khẩu trang)
+        - Chọn khuôn mặt/đầu lớn nhất (gần nhất) để xử lý
+        """
         detected_regions = []
         
-        # 1. Phát hiện khuôn mặt bằng Haar Cascade
-        gray = cv2.cvtColor(frame, cv2.COLOR_BGR2GRAY)
-        clahe = cv2.createCLAHE(clipLimit=2.0, tileGridSize=(8,8))
-        gray = clahe.apply(gray)
+        # Danh sách để lưu tất cả các detection (face và head)
+        all_detections = []  # Format: (x1, y1, x2, y2, area, type, face_roi_or_head_roi, face_box_or_head_box)
+        # type: 'face' hoặc 'head'
+        # face_roi_or_head_roi: ROI để predict helmet
+        # face_box_or_head_box: (x, y, w, h) cho face hoặc (head_x1, head_y1, head_x2, head_y2) cho head
         
-        faces = self.face_cascade.detectMultiScale(
-            gray,
-            scaleFactor=1.1,
-            minNeighbors=12,
-            minSize=(80, 80),
-            maxSize=(250, 250),
-            flags=cv2.CASCADE_SCALE_IMAGE
-        )
-        
-        # Lọc kết quả để giảm false positive
-        valid_faces = []
-        for (x, y, w, h) in faces:
-            aspect_ratio = w / h
-            if 0.7 <= aspect_ratio <= 1.4:
-                face_roi = gray[y:y+h, x:x+w]
-                if face_roi.size > 0:
-                    mean_intensity = np.mean(face_roi)
-                    std_intensity = np.std(face_roi)
-                    if std_intensity > 20 and 50 < mean_intensity < 200:
-                        valid_faces.append((x, y, w, h))
-        
-        # Vẽ bounding box cho khuôn mặt hợp lệ và nhận diện mũ bảo hiểm
-        for (x, y, w, h) in valid_faces:
-            # Mở rộng để bao gồm cả đầu
-            margin_x = int(w * 0.3)
-            margin_y = int(h * 0.4)
-            x1 = max(0, x - margin_x)
-            y1 = max(0, y - margin_y)
-            x2 = min(frame.shape[1], x + w + margin_x)
-            y2 = min(frame.shape[0], y + h + margin_y)
+        # 1. Phát hiện khuôn mặt bằng Haar Cascade (chạy song song)
+        if self.face_cascade is not None:
+            gray = cv2.cvtColor(frame, cv2.COLOR_BGR2GRAY)
+            clahe = cv2.createCLAHE(clipLimit=2.0, tileGridSize=(8,8))
+            gray = clahe.apply(gray)
             
-            # Cắt vùng khuôn mặt để nhận diện mũ bảo hiểm
-            face_roi = frame[y:y+h, x:x+w]
-            helmet_prediction, helmet_confidence = self.predict_helmet(face_roi)
+            faces = self.face_cascade.detectMultiScale(
+                gray,
+                scaleFactor=1.1,
+                minNeighbors=8,  # Giảm để nhận diện tốt hơn với khẩu trang
+                minSize=(60, 60),
+                maxSize=(300, 300),
+                flags=cv2.CASCADE_SCALE_IMAGE
+            )
             
-            # Chọn màu và text dựa trên kết quả nhận diện mũ bảo hiểm
-            if "Có mũ bảo hiểm" in helmet_prediction:
-                color = (0, 255, 0)  # Xanh lá
-                text = "YES"
-                self.helmet_stats['with_helmet'] += 1
+            # Lọc và lưu các khuôn mặt hợp lệ
+            for (x, y, w, h) in faces:
+                aspect_ratio = w / h
+                if 0.6 <= aspect_ratio <= 1.5:
+                    face_roi_gray = gray[y:y+h, x:x+w]
+                    if face_roi_gray.size > 0:
+                        mean_intensity = np.mean(face_roi_gray)
+                        std_intensity = np.std(face_roi_gray)
+                        if std_intensity > 15 and 40 < mean_intensity < 220:
+                            # Mở rộng để bao gồm cả đầu
+                            margin_x = int(w * 0.3)
+                            margin_y = int(h * 0.4)
+                            x1 = max(0, x - margin_x)
+                            y1 = max(0, y - margin_y)
+                            x2 = min(frame.shape[1], x + w + margin_x)
+                            y2 = min(frame.shape[0], y + h + margin_y)
+                            
+                            area = (x2 - x1) * (y2 - y1)
+                            face_roi_color = frame[y:y+h, x:x+w]  # ROI để predict
+                            all_detections.append((x1, y1, x2, y2, area, 'face', face_roi_color, (x, y, w, h)))
+        
+        # 2. Phát hiện đầu người bằng YOLO (chạy song song)
+        if self.model is not None:
+            try:
+                results = self.model(frame, classes=[0], conf=0.5)  # Class 0 = person
+                boxes = results[0].boxes
+                
+                if boxes is not None:
+                    for box in boxes:
+                        x1, y1, x2, y2 = box.xyxy[0].cpu().numpy()
+                        confidence = box.conf[0].cpu().numpy()
+                        
+                        height = y2 - y1
+                        width = x2 - x1
+                        
+                        # Chỉ xử lý nếu kích thước hợp lý
+                        if height > 100 and width > 50:
+                            # Tính vùng đầu (top 45% của người)
+                            head_height = height * 0.45
+                            
+                            head_x1 = max(0, int(x1 + width * 0.1))
+                            head_x2 = min(frame.shape[1], int(x2 - width * 0.1))
+                            head_y1 = max(0, int(y1 + height * 0.05))
+                            head_y2 = min(frame.shape[0], int(y1 + head_height))
+                            
+                            head_roi = frame[head_y1:head_y2, head_x1:head_x2]
+                            if head_roi.size > 0:
+                                area = (head_x2 - head_x1) * (head_y2 - head_y1)
+                                all_detections.append((head_x1, head_y1, head_x2, head_y2, area, 'head', head_roi, (head_x1, head_y1, head_x2, head_y2)))
+            except Exception as e:
+                # Lỗi khi sử dụng YOLO, bỏ qua
+                pass
+        
+        # 3. Chọn khuôn mặt/đầu gần nhất (lớn nhất)
+        if len(all_detections) > 0:
+            # Sắp xếp theo diện tích giảm dần (lớn nhất = gần nhất)
+            all_detections.sort(key=lambda d: d[4], reverse=True)
+            
+            # Chọn detection lớn nhất
+            best_detection = all_detections[0]
+            x1, y1, x2, y2, area, det_type, roi, box_info = best_detection
+            
+            # Nhận diện mũ bảo hiểm
+            has_helmet = False
+            helmet_confidence = 0.0
+            color = (255, 0, 0)  # Mặc định xanh dương
+            
+            if self.helmet_model is not None and roi.size > 0:
+                has_helmet, helmet_confidence, class_name = self.predict_helmet(roi)
+                
+                # Chọn màu và text
+                if has_helmet:
+                    color = (0, 255, 0)  # Xanh lá - Có mũ
+                    text = "YES"
+                else:
+                    color = (0, 0, 255)  # Đỏ - Không có mũ
+                    text = "NO"
+                
+                # Vẽ text "YES" hoặc "NO"
+                cv2.putText(frame, text, (x1, y1-10), 
+                           cv2.FONT_HERSHEY_SIMPLEX, 1.0, color, 3)
+                
+                # Vẽ confidence score
+                cv2.putText(frame, f"Conf: {helmet_confidence:.2f}", (x1, y2+25), 
+                           cv2.FONT_HERSHEY_SIMPLEX, 0.6, color, 2)
+                
+                # Vẽ label để phân biệt phương pháp phát hiện
+                method_label = "Haar" if det_type == 'face' else "YOLO"
+                cv2.putText(frame, method_label, (x1, y2+50), 
+                           cv2.FONT_HERSHEY_SIMPLEX, 0.5, (255, 255, 255), 2)
             else:
-                color = (0, 0, 255)  # Đỏ
-                text = "NO"
-                self.helmet_stats['without_helmet'] += 1
+                # Vẽ label khi không có model mũ
+                method_label = "Haar" if det_type == 'face' else "YOLO"
+                cv2.putText(frame, method_label, (x1, y2+25), 
+                           cv2.FONT_HERSHEY_SIMPLEX, 0.5, (255, 255, 255), 2)
             
             # Vẽ bounding box
             cv2.rectangle(frame, (x1, y1), (x2, y2), color, 3)
             
-            # Vẽ text "YES" hoặc "NO"
-            cv2.putText(frame, text, (x1, y1-10), 
-                       cv2.FONT_HERSHEY_SIMPLEX, 1.0, color, 3)
-            
-            # Vẽ confidence score
-            cv2.putText(frame, f"Conf: {helmet_confidence:.2f}", (x1, y2+25), 
-                       cv2.FONT_HERSHEY_SIMPLEX, 0.6, color, 2)
-            
-            detected_regions.append((x1, y1, x2-x1, y2-y1))
-            self.helmet_stats['total_detections'] += 1
-        
-        # 2. Phát hiện đầu người bằng YOLO (nếu không có khuôn mặt hợp lệ)
-        if len(valid_faces) == 0:
-            results = self.model(frame, classes=[0], conf=0.5)
-            boxes = results[0].boxes
-            
-            if boxes is not None:
-                for box in boxes:
-                    x1, y1, x2, y2 = box.xyxy[0].cpu().numpy()
-                    confidence = box.conf[0].cpu().numpy()
-                    
-                    height = y2 - y1
-                    width = x2 - x1
-                    
-                    if height > 100 and width > 50:
-                        head_height = height * 0.5
-                        
-                        head_x1 = max(0, x1 + width * 0.05)
-                        head_x2 = min(frame.shape[1], x2 - width * 0.05)
-                        head_y1 = max(0, y1 + height * 0.02)
-                        head_y2 = min(frame.shape[0], y1 + head_height)
-                        
-                        # Cắt vùng đầu để nhận diện mũ bảo hiểm
-                        head_roi = frame[int(head_y1):int(head_y2), int(head_x1):int(head_x2)]
-                        if head_roi.size > 0:
-                            helmet_prediction, helmet_confidence = self.predict_helmet(head_roi)
-                            
-                            # Chọn màu và text
-                            if "Có mũ bảo hiểm" in helmet_prediction:
-                                color = (0, 255, 0)  # Xanh lá
-                                text = "YES"
-                                self.helmet_stats['with_helmet'] += 1
-                            else:
-                                color = (0, 0, 255)  # Đỏ
-                                text = "NO"
-                                self.helmet_stats['without_helmet'] += 1
-                            
-                            # Vẽ bounding box
-                            cv2.rectangle(frame, (int(head_x1), int(head_y1)), 
-                                        (int(head_x2), int(head_y2)), color, 3)
-                            
-                            # Vẽ text "YES" hoặc "NO"
-                            cv2.putText(frame, text, (int(head_x1), int(head_y1)-10), 
-                                       cv2.FONT_HERSHEY_SIMPLEX, 1.0, color, 3)
-                            
-                            # Vẽ confidence score
-                            cv2.putText(frame, f"Conf: {helmet_confidence:.2f}", (int(head_x1), int(head_y2)+25), 
-                                       cv2.FONT_HERSHEY_SIMPLEX, 0.6, color, 2)
-                            
-                            detected_regions.append((int(head_x1), int(head_y1), 
-                                                   int(head_x2 - head_x1), int(head_y2 - head_y1)))
-                            self.helmet_stats['total_detections'] += 1
+            # Lưu thông tin
+            detected_regions.append((x1, y1, x2-x1, y2-y1, has_helmet, helmet_confidence))
         
         return frame, len(detected_regions), detected_regions
-    
-    def update_helmet_stats(self):
-        """Cập nhật thống kê mũ bảo hiểm"""
-        self.total_helmet_label.config(text=str(self.helmet_stats['total_detections']))
-        self.with_helmet_label.config(text=str(self.helmet_stats['with_helmet']))
-        self.without_helmet_label.config(text=str(self.helmet_stats['without_helmet']))
-    
-    def reset_helmet_stats(self):
-        """Reset thống kê mũ bảo hiểm"""
-        self.helmet_stats = {
-            'total_detections': 0,
-            'with_helmet': 0,
-            'without_helmet': 0
-        }
-        self.update_helmet_stats()
-        self.log_info("Đã reset thống kê mũ bảo hiểm")
     
     def change_save_folder(self):
         """Thay đổi thư mục lưu ảnh"""
@@ -436,55 +384,62 @@ class HeadDetectionApp:
         if folder:
             self.save_folder = folder
             self.folder_label.config(text=folder)
+            
+            # Tạo lại thư mục con cho có mũ và không có mũ
+            self.with_helmet_folder = os.path.join(self.save_folder, "with_helmet")
+            self.without_helmet_folder = os.path.join(self.save_folder, "without_helmet")
+            if not os.path.exists(self.with_helmet_folder):
+                os.makedirs(self.with_helmet_folder)
+            if not os.path.exists(self.without_helmet_folder):
+                os.makedirs(self.without_helmet_folder)
+            
             self.log_info(f"Đã thay đổi thư mục lưu: {folder}")
+            self.log_info(f"  - Có mũ: {self.with_helmet_folder}")
+            self.log_info(f"  - Không có mũ: {self.without_helmet_folder}")
     
-    def reset_captured_history(self):
-        """Reset lịch sử khuôn mặt đã chụp"""
-        self.captured_faces_history = []
-        self.detection_start_time = 0
-        self.log_info("Đã reset lịch sử chụp ảnh")
-    
-    def should_capture(self, detection_count, regions):
-        """Kiểm tra có nên chụp ảnh không - chụp mỗi 2 giây khi có khuôn mặt"""
-        current_time = time.time()
+    def save_face_image(self, frame, face_position, has_helmet=None):
+        """
+        Lưu ảnh khuôn mặt và phân loại vào folder tương ứng
         
-        if detection_count > 0:
-            if current_time - self.last_capture_time >= self.stability_wait_time:
-                return True, "Chụp định kỳ mỗi 2 giây"
+        Args:
+            frame: Frame ảnh gốc
+            face_position: (x, y, w, h) hoặc (x, y, w, h, has_helmet, confidence)
+            has_helmet: None (tự động xác định từ face_position) hoặc bool
+            
+        Returns:
+            filepath: Đường dẫn file đã lưu hoặc None
+        """
+        # Xử lý face_position có thể có thêm thông tin
+        if len(face_position) >= 5:
+            x, y, w, h = face_position[0:4]
+            if has_helmet is None and len(face_position) >= 5:
+                has_helmet = face_position[4]
+        else:
+            x, y, w, h = face_position
         
-        return False, ""
-    
-    def save_head_image(self, frame, head_position):
-        """Lưu ảnh đầu người với cải tiến"""
-        x, y, w, h = head_position
+        # Cắt vùng khuôn mặt
+        face_img = frame[y:y+h, x:x+w]
         
-        margin_x = int(w * 0.2)
-        margin_y = int(h * 0.25)
-        
-        x1 = max(0, x - margin_x)
-        y1 = max(0, y - margin_y)
-        x2 = min(frame.shape[1], x + w + margin_x)
-        y2 = min(frame.shape[0], y + h + margin_y)
-        
-        if (x2 - x1) < 150 or (y2 - y1) < 150:
-            center_x = (x1 + x2) // 2
-            center_y = (y1 + y2) // 2
-            size = max(150, max(x2 - x1, y2 - y1))
-            x1 = max(0, center_x - size // 2)
-            y1 = max(0, center_y - size // 2)
-            x2 = min(frame.shape[1], center_x + size // 2)
-            y2 = min(frame.shape[0], center_y + size // 2)
-        
-        head_img = frame[y1:y2, x1:x2]
-        
-        if head_img.size == 0:
+        if face_img.size == 0:
             return None
         
         timestamp = datetime.now().strftime("%Y%m%d_%H%M%S_%f")[:-3]
-        filename = f"head_{timestamp}.jpg"
-        filepath = os.path.join(self.save_folder, filename)
         
-        success = cv2.imwrite(filepath, head_img, [cv2.IMWRITE_JPEG_QUALITY, 95])
+        # Chọn thư mục dựa trên kết quả nhận diện mũ
+        if has_helmet is True:
+            # Có mũ bảo hiểm - lưu vào thư mục with_helmet
+            filename = f"face_with_helmet_{timestamp}.jpg"
+            filepath = os.path.join(self.with_helmet_folder, filename)
+        elif has_helmet is False:
+            # Không có mũ bảo hiểm - lưu vào thư mục without_helmet
+            filename = f"face_no_helmet_{timestamp}.jpg"
+            filepath = os.path.join(self.without_helmet_folder, filename)
+        else:
+            # Không xác định được - lưu vào thư mục chính
+            filename = f"face_{timestamp}.jpg"
+            filepath = os.path.join(self.save_folder, filename)
+        
+        success = cv2.imwrite(filepath, face_img, [cv2.IMWRITE_JPEG_QUALITY, 95])
         
         if success:
             return filepath
@@ -499,8 +454,8 @@ class HeadDetectionApp:
     
     def start_camera_detection(self):
         """Bắt đầu nhận diện từ camera"""
-        if self.model is None:
-            messagebox.showerror("Lỗi", "Model YOLO chưa được tải!")
+        if self.face_cascade is None:
+            messagebox.showerror("Lỗi", "Model Haar Cascade chưa được tải!")
             return
         
         self.cap = cv2.VideoCapture(0)
@@ -517,15 +472,16 @@ class HeadDetectionApp:
         self.camera_btn.config(state="disabled")
         self.stop_btn.config(state="normal")
         
-        self.log_info("Đã bắt đầu nhận diện đầu người + mũ bảo hiểm từ camera...")
+        self.log_info("Đã bắt đầu nhận diện khuôn mặt từ camera...")
         self.log_info(f"Thư mục lưu ảnh: {self.save_folder}")
+        self.log_info("⚠️ Ảnh sẽ được chụp tự động mỗi 2 giây khi phát hiện khuôn mặt")
         
         thread = threading.Thread(target=self.camera_detection_loop)
         thread.daemon = True
         thread.start()
     
     def camera_detection_loop(self):
-        """Vòng lặp nhận diện camera với logic chụp mới"""
+        """Vòng lặp nhận diện camera - chụp ảnh mỗi 2 giây"""
         try:
             while self.camera_running:
                 ret, frame = self.cap.read()
@@ -535,29 +491,34 @@ class HeadDetectionApp:
                     continue
                 
                 try:
-                    annotated_frame, detection_count, regions = self.detect_faces_and_heads_with_helmet(frame.copy())
+                    annotated_frame, detection_count, regions = self.detect_faces(frame.copy())
                 except Exception as e:
                     self.log_info(f"❌ Lỗi trong detection: {str(e)}")
                     continue
                 
                 current_time = time.time()
                 
-                should_capture, reason = self.should_capture(detection_count, regions)
-                
-                if should_capture and len(regions) > 0:
-                    region_pos = regions[0]
-                    filepath = self.save_head_image(frame, region_pos)
-                    if filepath:
-                        self.log_info(f"✅ {reason}: {os.path.basename(filepath)}")
+                # Chụp ảnh mỗi 2 giây khi có khuôn mặt
+                if detection_count > 0 and len(regions) > 0:
+                    if current_time - self.last_capture_time >= self.capture_interval:
+                        # Chụp tất cả khuôn mặt phát hiện được (đã có kết quả nhận diện mũ)
+                        for region_pos in regions:
+                            filepath = self.save_face_image(frame, region_pos)
+                            if filepath:
+                                # Xác định loại từ region_pos
+                                has_helmet_info = ""
+                                if len(region_pos) >= 5:
+                                    has_helmet = region_pos[4]
+                                    confidence = region_pos[5] if len(region_pos) >= 6 else 0.0
+                                    helmet_type = "Có mũ" if has_helmet else "Không có mũ"
+                                    has_helmet_info = f" - {helmet_type} ({confidence:.2f})"
+                                
+                                self.log_info(f"✅ Đã chụp{has_helmet_info}: {os.path.basename(filepath)}")
+                            else:
+                                self.log_info("❌ Không thể lưu ảnh")
                         self.last_capture_time = current_time
-                    else:
-                        self.log_info("❌ Không thể lưu ảnh")
                 
-                self.last_detection_count = detection_count
-                
-                # Cập nhật thống kê mũ bảo hiểm
-                self.update_helmet_stats()
-                
+                # Hiển thị frame
                 rgb_frame = cv2.cvtColor(annotated_frame, cv2.COLOR_BGR2RGB)
                 
                 height, width = rgb_frame.shape[:2]
@@ -574,21 +535,20 @@ class HeadDetectionApp:
                 self.image_label.config(image=photo, text="")
                 self.image_label.image = photo
                 
+                # Hiển thị thông tin
                 if detection_count > 0:
-                    if self.last_capture_time > 0:
-                        remaining_time = max(0, self.stability_wait_time - (current_time - self.last_capture_time))
-                        self.log_info(f"Phát hiện {detection_count} khuôn mặt/đầu - Chụp tiếp sau {remaining_time:.1f}s")
-                    else:
-                        self.log_info(f"Phát hiện {detection_count} khuôn mặt/đầu - Sẵn sàng chụp")
+                    remaining_time = max(0, self.capture_interval - (current_time - self.last_capture_time))
+                    self.log_info(f"Phát hiện {detection_count} khuôn mặt - Chụp tiếp sau {remaining_time:.1f}s")
                 else:
-                    if current_time - self.last_no_detection_log > 3.0:
-                        self.log_info("Không phát hiện khuôn mặt/đầu người nào")
-                        self.last_no_detection_log = current_time
+                    self.log_info("Không phát hiện khuôn mặt nào")
+                
+                time.sleep(0.1)  # Giảm tải CPU
         
         except Exception as e:
             self.log_info(f"❌ Lỗi trong camera loop: {str(e)}")
         finally:
-            self.cap.release()
+            if self.cap is not None:
+                self.cap.release()
             self.log_info("Camera đã được giải phóng")
     
     def stop_camera(self):
@@ -600,8 +560,8 @@ class HeadDetectionApp:
     
     def detect_from_image(self):
         """Nhận diện từ ảnh"""
-        if self.model is None:
-            messagebox.showerror("Lỗi", "Model YOLO chưa được tải!")
+        if self.face_cascade is None:
+            messagebox.showerror("Lỗi", "Model Haar Cascade chưa được tải!")
             return
         
         file_path = filedialog.askopenfilename(
@@ -618,15 +578,25 @@ class HeadDetectionApp:
                 messagebox.showerror("Lỗi", "Không thể đọc file ảnh!")
                 return
             
-            annotated_image, detection_count, regions = self.detect_faces_and_heads_with_helmet(image.copy())
+            annotated_image, detection_count, regions = self.detect_faces(image.copy())
             
+            # Lưu tất cả khuôn mặt phát hiện được (đã có kết quả nhận diện mũ)
             for i, region_pos in enumerate(regions):
-                filepath = self.save_head_image(image, region_pos)
+                filepath = self.save_face_image(image, region_pos)
                 if filepath:
-                    self.log_info(f"Đã lưu vùng {i+1}: {os.path.basename(filepath)}")
+                    # Xác định loại từ region_pos
+                    has_helmet_info = ""
+                    if len(region_pos) >= 5:
+                        has_helmet = region_pos[4]
+                        confidence = region_pos[5] if len(region_pos) >= 6 else 0.0
+                        helmet_type = "Có mũ" if has_helmet else "Không có mũ"
+                        has_helmet_info = f" - {helmet_type} ({confidence:.2f})"
+                    
+                    self.log_info(f"Đã lưu vùng {i+1}{has_helmet_info}: {os.path.basename(filepath)}")
                 else:
                     self.log_info(f"Không thể lưu vùng {i+1}")
             
+            # Hiển thị ảnh
             rgb_image = cv2.cvtColor(annotated_image, cv2.COLOR_BGR2RGB)
             
             height, width = rgb_image.shape[:2]
@@ -644,86 +614,12 @@ class HeadDetectionApp:
             self.image_label.image = photo
             
             if detection_count > 0:
-                self.log_info(f"Phát hiện {detection_count} khuôn mặt/đầu trong ảnh")
+                self.log_info(f"Phát hiện {detection_count} khuôn mặt trong ảnh")
             else:
-                self.log_info("Không phát hiện khuôn mặt/đầu nào trong ảnh")
-            
-            # Lưu vào folder results
-            output_filename = f"head_result_{os.path.basename(file_path)}"
-            output_path = os.path.join(self.results_folder, output_filename)
-            cv2.imwrite(output_path, annotated_image)
-            self.log_info(f"Đã lưu kết quả: {output_path}")
+                self.log_info("Không phát hiện khuôn mặt nào trong ảnh")
             
         except Exception as e:
             messagebox.showerror("Lỗi", f"Lỗi khi xử lý ảnh: {str(e)}")
-            self.log_info(f"Lỗi: {str(e)}")
-    
-    def detect_from_video(self):
-        """Nhận diện từ video"""
-        if self.model is None:
-            messagebox.showerror("Lỗi", "Model YOLO chưa được tải!")
-            return
-        
-        file_path = filedialog.askopenfilename(
-            title="Chọn video",
-            filetypes=[("Video files", "*.mp4 *.avi *.mov *.mkv *.wmv")]
-        )
-        
-        if not file_path:
-            return
-        
-        try:
-            cap = cv2.VideoCapture(file_path)
-            if not cap.isOpened():
-                messagebox.showerror("Lỗi", "Không thể mở file video!")
-                return
-            
-            fps = int(cap.get(cv2.CAP_PROP_FPS))
-            width = int(cap.get(cv2.CAP_PROP_FRAME_WIDTH))
-            height = int(cap.get(cv2.CAP_PROP_FRAME_HEIGHT))
-            
-            self.log_info(f"Đang xử lý video: {os.path.basename(file_path)}")
-            self.log_info(f"Kích thước: {width}x{height}, FPS: {fps}")
-            
-            # Lưu vào folder results
-            output_filename = f"head_result_{os.path.basename(file_path)}"
-            output_path = os.path.join(self.results_folder, output_filename)
-            fourcc = cv2.VideoWriter_fourcc(*'mp4v')
-            out = cv2.VideoWriter(output_path, fourcc, fps, (width, height))
-            
-            frame_count = 0
-            total_frames = int(cap.get(cv2.CAP_PROP_FRAME_COUNT))
-            captured_heads = 0
-            
-            while True:
-                ret, frame = cap.read()
-                if not ret:
-                    break
-                
-                annotated_frame, detection_count, regions = self.detect_faces_and_heads_with_helmet(frame.copy())
-                
-                for region_pos in regions:
-                    filepath = self.save_head_image(frame, region_pos)
-                    if filepath:
-                        captured_heads += 1
-                        self.log_info(f"Đã chụp từ video: {os.path.basename(filepath)}")
-                
-                self.last_detection_count = detection_count
-                out.write(annotated_frame)
-                
-                frame_count += 1
-                if frame_count % 30 == 0:
-                    progress = (frame_count / total_frames) * 100
-                    self.log_info(f"Tiến độ: {progress:.1f}% ({frame_count}/{total_frames}) - Đã chụp {captured_heads} vùng")
-            
-            cap.release()
-            out.release()
-            
-            self.log_info(f"Hoàn thành xử lý video! Đã lưu: {output_path}")
-            self.log_info(f"Tổng cộng đã chụp {captured_heads} vùng từ video")
-            
-        except Exception as e:
-            messagebox.showerror("Lỗi", f"Lỗi khi xử lý video: {str(e)}")
             self.log_info(f"Lỗi: {str(e)}")
 
 
